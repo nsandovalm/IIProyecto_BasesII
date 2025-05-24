@@ -11,10 +11,43 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
-import { paquetes as paquetesData, rutas, vehiculos } from "@/lib/data"
+import { paquetes as paquetesData } from "@/lib/data"
+import { fetchCentros } from "@/app/services/nodes.servis"
+import { fetchVehiculos } from "@/app/services/vehiculos.service"
+import { fetchRutas } from "@/app/services/rutas.service"
+import { fetchShipments } from "@/app/services/shipments.service"
+
+
+interface Shipment {
+  shipment_id: number;
+  cedula: string;
+  qr_code: string;
+  status: string;
+  origin: string | null;
+  destination: string | null;
+  created_at: string;  // fecha como string, por ej. "24/05/2025"
+  amount: string;      // aunque es numérico, en el JSON está como string
+}
+
+
+type Vehiculo = {
+  id: number;
+  tipo: string;
+  placa: string;
+  conductor: string;
+};
+
+type Ruta = {
+  id: number;
+  nombre: string;
+  descripcion: string;
+};
 
 // Esquema de validación
 const formSchema = z.object({
+  centrosLogistico: z.string({
+    required_error: "Por favor seleccione un centro logístico.",
+  }),
   ruta: z.string({
     required_error: "Por favor seleccione una ruta.",
   }),
@@ -25,16 +58,46 @@ const formSchema = z.object({
 
 export function AsignarRutaPage() {
   const { toast } = useToast()
-  const [paquetes, setPaquetes] = useState(paquetesData.filter((p) => p.estado === "pendiente"))
+  const [paquetes, setPaquetes] = useState<Shipment[]>([])
+  const [selectedCentro, setSelectedCentro] = useState("")
   const [selectedPaquetes, setSelectedPaquetes] = useState<string[]>([])
-  const [filteredPaquetes, setFilteredPaquetes] = useState(paquetes)
+  const [filteredPaquetes, setFilteredPaquetes] = useState<Shipment[]>(paquetes)
   const [searchTerm, setSearchTerm] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
+  const [rutas, setRutas] = useState<Ruta[]>([]);
+  const [centrosLogisticos, setCentrosLogisticos] = useState<{ node_id: string; name: string }[]>([])
+
+  useEffect(() => {
+    const fetchData = async () => {
+      const data = await fetchCentros();
+      form.setValue("centrosLogistico", data[0]?.name || "")
+      setCentrosLogisticos(data);
+    };
+    fetchData();
+  }, [])
+
+  const handleCentroChange = (value: string) => {
+    setSelectedCentro(value)
+    const centroSeleccionado = centrosLogisticos.find(c => c.name === value);
+
+    if (centroSeleccionado) {
+      const nodeId = centroSeleccionado.node_id;
+      fetchVehiculos(nodeId).then(data => {
+        setVehiculos(data);
+      });
+      fetchRutas(nodeId).then(data => {
+        setRutas(data);
+      });
+    }
+  }
 
   // Inicializar formulario con react-hook-form
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
+      centrosLogistico: "",
       ruta: "",
       vehiculo: "",
     },
@@ -42,16 +105,27 @@ export function AsignarRutaPage() {
 
   // Filtrar paquetes cuando cambia el término de búsqueda
   useEffect(() => {
-    const filtered = paquetes.filter(
-      (paquete) =>
-        paquete.idEnvio.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        paquete.nombreCliente.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        paquete.direccionDestino.toLowerCase().includes(searchTerm.toLowerCase()),
-    )
-    setFilteredPaquetes(filtered)
+    async function cargarShipmentsPendientes() {
+      try {
+        const allShipments = await fetchShipments();
+        const filtered = allShipments.filter(
+          (paquete: Shipment) =>
+            paquete.shipment_id.toString().toLowerCase().includes(searchTerm.toLowerCase()) ||
+            paquete.cedula.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (paquete.destination && paquete.destination.toLowerCase().includes(searchTerm.toLowerCase())),
+        )
+        setFilteredPaquetes(filtered)
+      } catch (error) {
+        console.error('Error cargando shipments pendientes:', error);
+        return [];
+      }
+    }
+
+
+
+    cargarShipmentsPendientes();
   }, [searchTerm, paquetes])
 
-  // Manejar selección de paquetes
   const handleSelectPaquete = (id: string) => {
     setSelectedPaquetes((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]))
   }
@@ -61,7 +135,7 @@ export function AsignarRutaPage() {
     if (selectedPaquetes.length === filteredPaquetes.length) {
       setSelectedPaquetes([])
     } else {
-      setSelectedPaquetes(filteredPaquetes.map((p) => p.id))
+      setSelectedPaquetes(filteredPaquetes.map((p) => p.shipment_id.toString()))
     }
   }
 
@@ -87,7 +161,7 @@ export function AsignarRutaPage() {
       })
 
       // Actualizar estado local
-      setPaquetes((prev) => prev.filter((p) => !selectedPaquetes.includes(p.id)))
+      setPaquetes(() => filteredPaquetes.filter((p) => !selectedPaquetes.includes(p.shipment_id.toString())))
       setSelectedPaquetes([])
 
       setIsSubmitting(false)
@@ -112,7 +186,39 @@ export function AsignarRutaPage() {
         <div className="border rounded-lg p-4 md:p-6">
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <FormField
+                  control={form.control}
+                  name="centrosLogistico"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Centro Logístico</FormLabel>
+                      <FormControl>
+                        <Select
+                          onValueChange={(value) => {
+                            field.onChange(value) // actualiza el valor del formulario
+                            handleCentroChange(value) // tu lógica personalizada
+                          }}
+                          value={field.value}
+                        >
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Seleccione un centro" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {centrosLogisticos.map((centro) => (
+                              <SelectItem key={centro.node_id} value={centro.name}>
+                                {centro.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
                 <FormField
                   control={form.control}
                   name="ruta"
@@ -126,13 +232,11 @@ export function AsignarRutaPage() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {rutas
-                            .filter((r) => r.activa)
-                            .map((ruta) => (
-                              <SelectItem key={ruta.id} value={ruta.id}>
-                                {ruta.nombre} - {ruta.zona}
-                              </SelectItem>
-                            ))}
+                          {rutas.map((ruta) => (
+                            <SelectItem key={ruta.id} value={ruta.nombre}>
+                              {ruta.nombre}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                       <FormMessage />
@@ -154,10 +258,10 @@ export function AsignarRutaPage() {
                         </FormControl>
                         <SelectContent>
                           {vehiculos
-                            .filter((v) => v.disponible)
+                            .filter((v) => v.tipo)
                             .map((vehiculo) => (
-                              <SelectItem key={vehiculo.id} value={vehiculo.id}>
-                                {vehiculo.tipo} - {vehiculo.placa} ({vehiculo.capacidad}kg)
+                              <SelectItem key={vehiculo.id} value={vehiculo.placa}>
+                                {vehiculo.tipo} - {vehiculo.placa} ({vehiculo.conductor})
                               </SelectItem>
                             ))}
                         </SelectContent>
@@ -206,8 +310,6 @@ export function AsignarRutaPage() {
                     <TableHead>Cliente</TableHead>
                     <TableHead className="hidden md:table-cell">Dirección</TableHead>
                     <TableHead className="hidden md:table-cell">Fecha</TableHead>
-                    <TableHead className="hidden md:table-cell">Peso (kg)</TableHead>
-                    <TableHead className="hidden md:table-cell">Centro</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -219,22 +321,20 @@ export function AsignarRutaPage() {
                     </TableRow>
                   ) : (
                     filteredPaquetes.map((paquete) => (
-                      <TableRow key={paquete.id}>
+                      <TableRow key={paquete.shipment_id}>
                         <TableCell>
                           <Checkbox
-                            checked={selectedPaquetes.includes(paquete.id)}
-                            onCheckedChange={() => handleSelectPaquete(paquete.id)}
-                            aria-label={`Seleccionar paquete ${paquete.idEnvio}`}
+                            checked={selectedPaquetes.includes(paquete.shipment_id.toString())}
+                            onCheckedChange={() => handleSelectPaquete(paquete.shipment_id.toString())}
+                            aria-label={`Seleccionar paquete ${paquete.shipment_id}`}
                           />
                         </TableCell>
-                        <TableCell className="font-medium">{paquete.idEnvio}</TableCell>
-                        <TableCell>{paquete.nombreCliente}</TableCell>
-                        <TableCell className="hidden md:table-cell">{paquete.direccionDestino}</TableCell>
+                        <TableCell className="font-medium">{paquete.shipment_id}</TableCell>
+                        <TableCell>{paquete.cedula}</TableCell>
+                        <TableCell className="hidden md:table-cell">{paquete.destination}</TableCell>
                         <TableCell className="hidden md:table-cell">
-                          {new Date(paquete.fecha).toLocaleDateString()}
+                          {paquete.created_at}
                         </TableCell>
-                        <TableCell className="hidden md:table-cell">{paquete.peso}</TableCell>
-                        <TableCell className="hidden md:table-cell">{paquete.centroLogistico}</TableCell>
                       </TableRow>
                     ))
                   )}
