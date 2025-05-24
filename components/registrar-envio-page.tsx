@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/components/ui/use-toast"
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { centrosLogisticos } from "@/lib/data"
+import { fetchCentros } from "@/app/services/nodes.servis"
 
 // Esquema de validación
 const formSchema = z.object({
@@ -32,10 +32,23 @@ const formSchema = z.object({
   }),
 })
 
+
+
 export function RegistrarEnvioPage() {
   const { toast } = useToast()
   const router = useRouter()
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [centrosLogisticos, setCentrosLogisticos] = useState<{ node_id: string; name: string }[]>([])
+
+  useEffect(() => {
+    const fetchData = async () => {
+      const data = await fetchCentros();
+      console.log(data);
+      setCentrosLogisticos(data);
+    };
+    fetchData();
+  }, [])
+
 
   // Inicializar formulario con react-hook-form
   const form = useForm<z.infer<typeof formSchema>>({
@@ -121,8 +134,8 @@ export function RegistrarEnvioPage() {
                       </FormControl>
                       <SelectContent>
                         {centrosLogisticos.map((centro) => (
-                          <SelectItem key={centro.id} value={centro.id}>
-                            {centro.nombre}
+                          <SelectItem key={centro.node_id} value={centro.name}>
+                            {centro.name}
                           </SelectItem>
                         ))}
                       </SelectContent>
